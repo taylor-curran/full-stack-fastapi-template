@@ -5,17 +5,17 @@ Feature: Users API endpoints
     * def uniqueId = java.util.UUID.randomUUID() + ''
     * def signupEmail = "karate-user-" + uniqueId + "@example.com"
     * def signupPassword = "changethis123"
-
-  Scenario: Superuser can read own profile
+    * def adminLoginData = { username: '#(adminEmail)', password: '#(adminPassword)' }
     Given path "login", "access-token"
-    And form field username = adminEmail
-    And form field password = adminPassword
+    And form fields adminLoginData
     When method post
     Then status 200
     * def accessToken = response.access_token
+    * def authHeader = "Bearer " + accessToken
 
+  Scenario: Superuser can read own profile
     Given path "users", "me"
-    And header Authorization = "Bearer " + accessToken
+    And header Authorization = authHeader
     When method get
     Then status 200
     And match response.email == adminEmail
