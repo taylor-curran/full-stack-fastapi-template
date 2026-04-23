@@ -34,6 +34,28 @@ To check the logs of a specific service, add the name of the service, e.g.:
 docker compose logs backend
 ```
 
+## Cursor Cloud specific instructions
+
+For Cursor Cloud agents, this repository includes a committed environment setup in `.cursor/environment.json` and `.cursor/Dockerfile` that preinstalls:
+
+- `docker.io` equivalent Docker Engine + Compose plugin tooling
+- `maven`
+- PostgreSQL server and client packages
+- `python3.12-venv`
+- Bun (`bun`, `bunx`)
+- Playwright Chromium system dependencies
+
+Targeted backend/frontend E2E checks are available with:
+
+```bash
+bash scripts/test-targeted-e2e.sh
+```
+
+That script validates:
+
+- Backend Karate target (`npm run test:karate:targeted`)
+- Frontend Playwright target (`npm run test:playwright:targeted`)
+
 ## Mailcatcher
 
 Mailcatcher is a simple SMTP server that catches all emails sent by the backend during local development. Instead of sending real emails, they are captured and displayed in a web interface.

@@ -1,0 +1,9 @@
+{
+  "$schema": "https://www.cursor.com/schemas/environment.schema.json",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "install": "bun ci && cd backend && uv sync && cd ../frontend && bunx playwright install chromium",
+  "start": "sudo service docker start"
+}
