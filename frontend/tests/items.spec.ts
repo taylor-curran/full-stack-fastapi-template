@@ -74,6 +74,61 @@ test.describe("Items management", () => {
     await expect(page.getByText("Title is required")).toBeVisible()
   })
 
+  test("Created item is visible after page reload", async ({ page }) => {
+    const title = randomItemTitle()
+    const description = randomItemDescription()
+
+    await page.getByRole("button", { name: "Add Item" }).click()
+    await page.getByLabel("Title").fill(title)
+    await page.getByLabel("Description").fill(description)
+    await page.getByRole("button", { name: "Save" }).click()
+    await expect(page.getByText("Item created successfully")).toBeVisible()
+
+    await page.reload()
+
+    const row = page.getByRole("row").filter({ hasText: title })
+    await expect(row).toBeVisible()
+    await expect(row.getByText(description)).toBeVisible()
+  })
+
+  test("Edited item persists after page reload", async ({ page }) => {
+    const originalTitle = randomItemTitle()
+    const updatedTitle = randomItemTitle()
+
+    await page.getByRole("button", { name: "Add Item" }).click()
+    await page.getByLabel("Title").fill(originalTitle)
+    await page.getByRole("button", { name: "Save" }).click()
+    await expect(page.getByText("Item created successfully")).toBeVisible()
+
+    const row = page.getByRole("row").filter({ hasText: originalTitle })
+    await row.getByRole("button").last().click()
+    await page.getByRole("menuitem", { name: "Edit Item" }).click()
+    await page.getByLabel("Title").fill(updatedTitle)
+    await page.getByRole("button", { name: "Save" }).click()
+    await expect(page.getByText("Item updated successfully")).toBeVisible()
+
+    await page.reload()
+    await expect(page.getByRole("row").filter({ hasText: updatedTitle })).toBeVisible()
+  })
+
+  test("Deleted item stays removed after page reload", async ({ page }) => {
+    const title = randomItemTitle()
+
+    await page.getByRole("button", { name: "Add Item" }).click()
+    await page.getByLabel("Title").fill(title)
+    await page.getByRole("button", { name: "Save" }).click()
+    await expect(page.getByText("Item created successfully")).toBeVisible()
+
+    const row = page.getByRole("row").filter({ hasText: title })
+    await row.getByRole("button").last().click()
+    await page.getByRole("menuitem", { name: "Delete Item" }).click()
+    await page.getByRole("button", { name: "Delete" }).click()
+    await expect(page.getByText("The item was deleted successfully")).toBeVisible()
+
+    await page.reload()
+    await expect(page.getByRole("row").filter({ hasText: title })).not.toBeVisible()
+  })
+
   test.describe("Edit and Delete", () => {
     let itemTitle: string
 

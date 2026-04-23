@@ -37,6 +37,38 @@ test("Forgot Password link is visible", async ({ page }) => {
   ).toBeVisible()
 })
 
+test("Sign up link navigates to registration page", async ({ page }) => {
+  await page.goto("/login")
+
+  await page.getByRole("link", { name: "Sign up" }).click()
+  await page.waitForURL("/signup")
+  await expect(page).toHaveURL("/signup")
+})
+
+test("Log in form submits with Enter key", async ({ page }) => {
+  await page.goto("/login")
+
+  await fillForm(page, firstSuperuser, firstSuperuserPassword)
+  await page.getByTestId("password-input").press("Enter")
+
+  await page.waitForURL("/")
+  await expect(
+    page.getByText("Welcome back, nice to see you again!"),
+  ).toBeVisible()
+})
+
+test("Authenticated users are redirected away from /login", async ({ page }) => {
+  await page.goto("/login")
+
+  await fillForm(page, firstSuperuser, firstSuperuserPassword)
+  await page.getByRole("button", { name: "Log In" }).click()
+  await page.waitForURL("/")
+
+  await page.goto("/login")
+  await page.waitForURL("/")
+  await expect(page).toHaveURL("/")
+})
+
 test("Log in with valid email and password ", async ({ page }) => {
   await page.goto("/login")
 
