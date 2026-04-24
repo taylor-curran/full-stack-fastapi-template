@@ -1,1 +1,6 @@
 target/
+
+# IDE / Maven noise
+.idea/
+*.iml
+dependency-reduced-pom.xml

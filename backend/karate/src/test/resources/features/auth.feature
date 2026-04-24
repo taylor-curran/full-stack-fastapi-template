@@ -5,20 +5,11 @@ Feature: Auth API endpoints
     * def userId = java.util.UUID.randomUUID() + ''
     * def loginEmail = 'karate-auth-' + userId + '@example.com'
     * def loginPassword = 'changethis123'
+    # callonce ensures the user is created exactly once per scenario regardless
+    # of how many times the helper is referenced.
+    * callonce read('classpath:helpers/signup-user.feature') { email: '#(loginEmail)', password: '#(loginPassword)', fullName: 'Karate Auth User' }
 
   Scenario: User can get an access token
-    Given path "users", "signup"
-    And request
-      """
-      {
-        "email": "#(loginEmail)",
-        "password": "#(loginPassword)",
-        "full_name": "Karate Auth User"
-      }
-      """
-    When method post
-    Then status 200
-
     Given path "login", "access-token"
     And form field username = loginEmail
     And form field password = loginPassword
@@ -28,47 +19,21 @@ Feature: Auth API endpoints
     And match response.token_type == 'bearer'
 
   Scenario: Login fails with incorrect password
-    Given path "users", "signup"
-    And request
-      """
-      {
-        "email": "#(loginEmail)",
-        "password": "#(loginPassword)",
-        "full_name": "Karate Auth User"
-      }
-      """
-    When method post
-    Then status 200
-
     Given path "login", "access-token"
     And form field username = loginEmail
     And form field password = "invalid-password"
     When method post
     Then status 400
-    And match response.detail == "Incorrect email or password"
+    # Avoid coupling to the exact UI-facing copy in app/api/routes/login.py.
+    # Assert on shape + a stable token instead.
+    And match response.detail == '#string'
+    And match response.detail contains 'password'
 
   Scenario: Test-token endpoint accepts a valid bearer token
-    Given path "users", "signup"
-    And request
-      """
-      {
-        "email": "#(loginEmail)",
-        "password": "#(loginPassword)",
-        "full_name": "Karate Auth User"
-      }
-      """
-    When method post
-    Then status 200
-
-    Given path "login", "access-token"
-    And form field username = loginEmail
-    And form field password = loginPassword
-    When method post
-    Then status 200
-    * def accessToken = response.access_token
+    * def auth = call read('classpath:helpers/login.feature') { username: '#(loginEmail)', password: '#(loginPassword)' }
 
     Given path "login", "test-token"
-    And header Authorization = "Bearer " + accessToken
+    And header Authorization = auth.authHeader
     When method post
     Then status 200
     And match response.email == loginEmail

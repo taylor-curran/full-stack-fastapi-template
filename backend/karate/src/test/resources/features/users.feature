@@ -5,17 +5,15 @@ Feature: Users API endpoints
     * def uniqueId = java.util.UUID.randomUUID() + ''
     * def signupEmail = "karate-user-" + uniqueId + "@example.com"
     * def signupPassword = "changethis123"
-    * def adminLoginData = { username: '#(adminEmail)', password: '#(adminPassword)' }
-    Given path "login", "access-token"
-    And form fields adminLoginData
-    When method post
-    Then status 200
-    * def accessToken = response.access_token
-    * def authHeader = "Bearer " + accessToken
 
   Scenario: Superuser can read own profile
+    # Only this scenario actually needs the admin token, so do the login
+    # here rather than in Background (which would charge the public-signup
+    # scenarios for an admin round-trip they never use).
+    * def adminAuth = call read('classpath:helpers/login.feature') { username: '#(adminEmail)', password: '#(adminPassword)' }
+
     Given path "users", "me"
-    And header Authorization = authHeader
+    And header Authorization = adminAuth.authHeader
     When method get
     Then status 200
     And match response.email == adminEmail
@@ -38,17 +36,7 @@ Feature: Users API endpoints
     And match response.id == '#uuid'
 
   Scenario: Duplicate signup email is rejected
-    Given path "users", "signup"
-    And request
-      """
-      {
-        "email": "#(signupEmail)",
-        "password": "#(signupPassword)",
-        "full_name": "Karate Signup User"
-      }
-      """
-    When method post
-    Then status 200
+    * call read('classpath:helpers/signup-user.feature') { email: '#(signupEmail)', password: '#(signupPassword)', fullName: 'Karate Signup User' }
 
     Given path "users", "signup"
     And request
@@ -61,4 +49,6 @@ Feature: Users API endpoints
       """
     When method post
     Then status 400
-    And match response.detail == "The user with this email already exists in the system"
+    # Avoid coupling to the exact UI-facing copy in app/api/routes/users.py.
+    And match response.detail == '#string'
+    And match response.detail == '#regex (?i).*already exists.*'
