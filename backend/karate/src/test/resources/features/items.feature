@@ -87,6 +87,98 @@ Feature: Items API endpoints
     And match response.detail == '#string'
     And match response.detail == '#regex (?i).*not found.*'
 
+  Scenario: Superuser can bulk create items
+    * def suffix = java.util.UUID.randomUUID() + ''
+    * def titleA = 'Karate Bulk A ' + suffix
+    * def titleB = 'Karate Bulk B ' + suffix
+    * def titleC = 'Karate Bulk C ' + suffix
+
+    Given path 'items', 'bulk'
+    And header Authorization = adminAuth.authHeader
+    And request
+      """
+      [
+        { "title": "#(titleA)", "description": "first" },
+        { "title": "#(titleB)", "description": "second" },
+        { "title": "#(titleC)", "description": null }
+      ]
+      """
+    When method post
+    Then status 200
+    And match response.count == 3
+    And match response.data == '#[3]'
+    And match response.data[*].title contains titleA
+    And match response.data[*].title contains titleB
+    And match response.data[*].title contains titleC
+
+  Scenario: Bulk create returns 409 on duplicate titles in payload
+    * def suffix = java.util.UUID.randomUUID() + ''
+    * def dupTitle = 'Karate Bulk Dup ' + suffix
+
+    Given path 'items', 'bulk'
+    And header Authorization = adminAuth.authHeader
+    And request
+      """
+      [
+        { "title": "#(dupTitle)", "description": "one" },
+        { "title": "#(dupTitle)", "description": "two" }
+      ]
+      """
+    When method post
+    Then status 409
+    And match response.detail == '#string'
+    # Loose match so tweaking the error wording in items.py doesn't
+    # silently break this assertion.
+    And match response.detail == '#regex (?i).*duplicate.*'
+    And match response.detail contains dupTitle
+
+  Scenario: Bulk create already-existing title against current user returns 409
+    * def suffix = java.util.UUID.randomUUID() + ''
+    * def existingTitle = 'Karate Bulk Existing ' + suffix
+    * def newTitle = 'Karate Bulk New ' + suffix
+
+    # Seed an existing item for the admin user.
+    Given path 'items'
+    And header Authorization = adminAuth.authHeader
+    And request { title: '#(existingTitle)', description: 'seed' }
+    When method post
+    Then status 200
+
+    # Bulk request that collides with the seeded title should 409.
+    Given path 'items', 'bulk'
+    And header Authorization = adminAuth.authHeader
+    And request
+      """
+      [
+        { "title": "#(newTitle)", "description": "fresh" },
+        { "title": "#(existingTitle)", "description": "conflict" }
+      ]
+      """
+    When method post
+    Then status 409
+    And match response.detail == '#string'
+    And match response.detail == '#regex (?i).*already exist.*'
+    And match response.detail contains existingTitle
+
+  Scenario: Bulk create returns 422 on validation failure
+    * def suffix = java.util.UUID.randomUUID() + ''
+    * def validTitle = 'Karate Bulk Valid ' + suffix
+
+    Given path 'items', 'bulk'
+    And header Authorization = adminAuth.authHeader
+    And request
+      """
+      [
+        { "title": "#(validTitle)", "description": "ok" },
+        { "description": "missing title" }
+      ]
+      """
+    When method post
+    Then status 422
+    # FastAPI default 422 shape: { detail: [ { loc, msg, type, ... } ] }
+    And match response.detail == '#[_ > 0]'
+    And match response.detail[*].loc contains '#notnull'
+
   Scenario: Non-superuser cannot read another user's item (403)
     # Owner: a fresh non-superuser, created via public signup.
     * def ownerEmail = 'karate-item-owner-' + java.util.UUID.randomUUID() + '@example.com'
