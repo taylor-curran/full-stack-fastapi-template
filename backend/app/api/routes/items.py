@@ -1,8 +1,9 @@
 import uuid
+from enum import Enum
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
-from sqlmodel import col, func, select
+from fastapi import APIRouter, HTTPException, Query
+from sqlmodel import col, func, or_, select
 
 from app.api.deps import CurrentUser, SessionDep
 from app.models import Item, ItemCreate, ItemPublic, ItemsPublic, ItemUpdate, Message
@@ -10,36 +11,99 @@ from app.models import Item, ItemCreate, ItemPublic, ItemsPublic, ItemUpdate, Me
 router = APIRouter(prefix="/items", tags=["items"])
 
 
+class ItemSort(str, Enum):
+    created_at_desc = "created_at_desc"
+    created_at_asc = "created_at_asc"
+    title_asc = "title_asc"
+    title_desc = "title_desc"
+
+
+class ItemStatus(str, Enum):
+    """Filter items by ownership.
+
+    The ``Item`` model has no explicit ``status`` column, so we expose the
+    closest existing domain concept: whether the item belongs to the current
+    user (``mine``) or to another user (``others``). Normal users can only
+    read their own items, so ``others`` is mainly meaningful for superusers.
+    """
+
+    mine = "mine"
+    others = "others"
+
+
 @router.get("/", response_model=ItemsPublic)
 def read_items(
-    session: SessionDep, current_user: CurrentUser, skip: int = 0, limit: int = 100
+    session: SessionDep,
+    current_user: CurrentUser,
+    skip: int = 0,
+    limit: int = 100,
+    status: ItemStatus | None = Query(
+        default=None,
+        description="Filter by ownership: 'mine' or 'others'.",
+    ),
+    sort: ItemSort = Query(
+        default=ItemSort.created_at_desc,
+        description="Sort order for results.",
+    ),
+    q: str | None = Query(
+        default=None,
+        description="Case-insensitive search across title and description.",
+    ),
 ) -> Any:
     """
     Retrieve items.
+
+    Supports optional filtering (``status``, ``q``) and sorting (``sort``).
+    Omitting all optional query parameters preserves the previous default
+    behavior: items are returned sorted by ``created_at`` descending, scoped
+    by the caller's permissions.
     """
 
-    if current_user.is_superuser:
-        count_statement = select(func.count()).select_from(Item)
-        count = session.exec(count_statement).one()
-        statement = (
-            select(Item).order_by(col(Item.created_at).desc()).offset(skip).limit(limit)
+    count_statement = select(func.count()).select_from(Item)
+    statement = select(Item)
+
+    if not current_user.is_superuser:
+        count_statement = count_statement.where(Item.owner_id == current_user.id)
+        statement = statement.where(Item.owner_id == current_user.id)
+
+    if status is ItemStatus.mine:
+        count_statement = count_statement.where(Item.owner_id == current_user.id)
+        statement = statement.where(Item.owner_id == current_user.id)
+    elif status is ItemStatus.others:
+        count_statement = count_statement.where(Item.owner_id != current_user.id)
+        statement = statement.where(Item.owner_id != current_user.id)
+
+    if q:
+        like_pattern = f"%{q}%"
+        search_clause = or_(
+            col(Item.title).ilike(like_pattern),
+            col(Item.description).ilike(like_pattern),
         )
-        items = session.exec(statement).all()
+        count_statement = count_statement.where(search_clause)
+        statement = statement.where(search_clause)
+
+    # Apply a deterministic ordering with a stable tie-breaker on the
+    # primary key so that pagination and equal-key rows are reproducible.
+    if sort is ItemSort.created_at_asc:
+        statement = statement.order_by(col(Item.created_at).asc(), col(Item.id).asc())
+    elif sort is ItemSort.title_asc:
+        statement = statement.order_by(
+            col(Item.title).asc(),
+            col(Item.created_at).desc(),
+            col(Item.id).asc(),
+        )
+    elif sort is ItemSort.title_desc:
+        statement = statement.order_by(
+            col(Item.title).desc(),
+            col(Item.created_at).desc(),
+            col(Item.id).asc(),
+        )
     else:
-        count_statement = (
-            select(func.count())
-            .select_from(Item)
-            .where(Item.owner_id == current_user.id)
-        )
-        count = session.exec(count_statement).one()
-        statement = (
-            select(Item)
-            .where(Item.owner_id == current_user.id)
-            .order_by(col(Item.created_at).desc())
-            .offset(skip)
-            .limit(limit)
-        )
-        items = session.exec(statement).all()
+        statement = statement.order_by(col(Item.created_at).desc(), col(Item.id).asc())
+
+    count = session.exec(count_statement).one()
+    statement = statement.offset(skip).limit(limit)
+    items = session.exec(statement).all()
 
     items_public = [ItemPublic.model_validate(item) for item in items]
     return ItemsPublic(data=items_public, count=count)
