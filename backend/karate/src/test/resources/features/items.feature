@@ -123,6 +123,54 @@ Feature: Items API endpoints
     Then status 422
     And match response.detail == '#[]'
 
+  Scenario: Superuser can list items with q and sort filters
+    * def listNeedle = "karate-list-" + java.util.UUID.randomUUID()
+    * def titleOne = "bbb-" + listNeedle
+    * def titleTwo = "aaa-" + listNeedle
+    * def titleOther = "zzz-other-" + java.util.UUID.randomUUID()
+
+    Given path "items"
+    And header Authorization = adminAuth.authHeader
+    And request { title: '#(titleOne)', description: 'filter candidate one' }
+    When method post
+    Then status 200
+    * def firstId = response.id
+
+    Given path "items"
+    And header Authorization = adminAuth.authHeader
+    And request { title: '#(titleTwo)', description: 'filter candidate two' }
+    When method post
+    Then status 200
+    * def secondId = response.id
+
+    Given path "items"
+    And header Authorization = adminAuth.authHeader
+    And request { title: '#(titleOther)', description: 'does not match query' }
+    When method post
+    Then status 200
+    * def thirdId = response.id
+
+    Given path "items"
+    And header Authorization = adminAuth.authHeader
+    And param q = listNeedle
+    And param sort = "title_asc"
+    When method get
+    Then status 200
+    And match response.count >= 2
+    And match response.data[*].id contains firstId
+    And match response.data[*].id contains secondId
+    And match response.data[*].id !contains thirdId
+    And match response.data[0].title == titleTwo
+    And match response.data[1].title == titleOne
+
+  Scenario: List items fails validation for invalid sort value
+    Given path "items"
+    And header Authorization = adminAuth.authHeader
+    And param sort = "not-a-valid-sort"
+    When method get
+    Then status 422
+    And match response.detail == '#[]'
+
   Scenario: Superuser can update an existing item
     * def originalTitle = "Karate Item " + java.util.UUID.randomUUID()
     * def updatedTitle = "Karate Item Updated " + java.util.UUID.randomUUID()

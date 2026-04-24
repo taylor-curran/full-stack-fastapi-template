@@ -1,44 +1,79 @@
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
+from sqlalchemy import or_
 from sqlmodel import col, func, select
 
 from app.api.deps import CurrentUser, SessionDep
-from app.models import Item, ItemCreate, ItemPublic, ItemsPublic, ItemUpdate, Message
+from app.models import (
+    Item,
+    ItemCreate,
+    ItemPublic,
+    ItemsPublic,
+    ItemUpdate,
+    Message,
+    User,
+)
 
 router = APIRouter(prefix="/items", tags=["items"])
 
 
+ItemStatus = Literal["active", "inactive"]
+ItemSort = Literal["created_at_desc", "created_at_asc", "title_asc", "title_desc"]
+
+
+def _get_sort_clauses(sort: ItemSort) -> tuple[Any, Any]:
+    if sort == "created_at_asc":
+        return col(Item.created_at).asc(), col(Item.id).asc()
+    if sort == "title_asc":
+        return col(Item.title).asc(), col(Item.id).asc()
+    if sort == "title_desc":
+        return col(Item.title).desc(), col(Item.id).desc()
+    return col(Item.created_at).desc(), col(Item.id).desc()
+
+
 @router.get("/", response_model=ItemsPublic)
 def read_items(
-    session: SessionDep, current_user: CurrentUser, skip: int = 0, limit: int = 100
+    session: SessionDep,
+    current_user: CurrentUser,
+    skip: int = 0,
+    limit: int = 100,
+    status: ItemStatus | None = None,
+    sort: ItemSort = "created_at_desc",
+    q: str | None = None,
 ) -> Any:
     """
     Retrieve items.
     """
-    if current_user.is_superuser:
-        count_statement = select(func.count()).select_from(Item)
-        count = session.exec(count_statement).one()
-        statement = (
-            select(Item).order_by(col(Item.created_at).desc()).offset(skip).limit(limit)
+    statement = select(Item)
+
+    if not current_user.is_superuser:
+        statement = statement.where(Item.owner_id == current_user.id)
+
+    if status:
+        statement = statement.join(User, User.id == Item.owner_id).where(
+            User.is_active == (status == "active")
         )
-        items = session.exec(statement).all()
-    else:
-        count_statement = (
-            select(func.count())
-            .select_from(Item)
-            .where(Item.owner_id == current_user.id)
+
+    query_text = q.strip() if q else None
+    if query_text:
+        search_term = f"%{query_text}%"
+        statement = statement.where(
+            or_(
+                col(Item.title).ilike(search_term),
+                col(Item.description).ilike(search_term),
+            )
         )
-        count = session.exec(count_statement).one()
-        statement = (
-            select(Item)
-            .where(Item.owner_id == current_user.id)
-            .order_by(col(Item.created_at).desc())
-            .offset(skip)
-            .limit(limit)
-        )
-        items = session.exec(statement).all()
+
+    count_statement = select(func.count()).select_from(statement.subquery())
+    count = session.exec(count_statement).one()
+
+    primary_sort, secondary_sort = _get_sort_clauses(sort)
+    statement = (
+        statement.order_by(primary_sort, secondary_sort).offset(skip).limit(limit)
+    )
+    items = session.exec(statement).all()
 
     items_public = [ItemPublic.model_validate(item) for item in items]
     return ItemsPublic(data=items_public, count=count)

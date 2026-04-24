@@ -3,9 +3,11 @@ import uuid
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
+from app import crud
 from app.core.config import settings
-from app.models import Item
+from app.models import Item, ItemCreate, UserCreate
 from tests.utils.item import create_random_item
+from tests.utils.user import create_random_user
 
 
 def test_create_item(
@@ -164,6 +166,148 @@ def test_read_items(
     assert response.status_code == 200
     content = response.json()
     assert len(content["data"]) >= 2
+
+
+def test_read_items_filter_status_superuser(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session
+) -> None:
+    active_user = create_random_user(db)
+    inactive_user = create_random_user(db)
+    inactive_user.is_active = False
+    db.add(inactive_user)
+    db.commit()
+    db.refresh(inactive_user)
+
+    active_item = crud.create_item(
+        session=db,
+        item_in=ItemCreate(
+            title=f"status-active-{uuid.uuid4()}",
+            description="active owner item",
+        ),
+        owner_id=active_user.id,
+    )
+    inactive_item = crud.create_item(
+        session=db,
+        item_in=ItemCreate(
+            title=f"status-inactive-{uuid.uuid4()}",
+            description="inactive owner item",
+        ),
+        owner_id=inactive_user.id,
+    )
+
+    active_response = client.get(
+        f"{settings.API_V1_STR}/items/?status=active",
+        headers=superuser_token_headers,
+    )
+    assert active_response.status_code == 200
+    active_data = active_response.json()["data"]
+    active_ids = {item["id"] for item in active_data}
+    assert str(active_item.id) in active_ids
+    assert str(inactive_item.id) not in active_ids
+
+    inactive_response = client.get(
+        f"{settings.API_V1_STR}/items/?status=inactive",
+        headers=superuser_token_headers,
+    )
+    assert inactive_response.status_code == 200
+    inactive_data = inactive_response.json()["data"]
+    inactive_ids = {item["id"] for item in inactive_data}
+    assert str(inactive_item.id) in inactive_ids
+    assert str(active_item.id) not in inactive_ids
+
+
+def test_read_items_filter_q_superuser(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    needle = f"needle-{uuid.uuid4()}"
+    match_title = f"title-{needle}"
+    no_match_title = f"q-title-{uuid.uuid4()}"
+
+    first_response = client.post(
+        f"{settings.API_V1_STR}/items/",
+        headers=superuser_token_headers,
+        json={"title": match_title, "description": "unrelated description"},
+    )
+    assert first_response.status_code == 200
+    title_item_id = first_response.json()["id"]
+
+    second_response = client.post(
+        f"{settings.API_V1_STR}/items/",
+        headers=superuser_token_headers,
+        json={"title": f"q-title-{uuid.uuid4()}", "description": f"contains {needle}"},
+    )
+    assert second_response.status_code == 200
+    description_item_id = second_response.json()["id"]
+
+    third_response = client.post(
+        f"{settings.API_V1_STR}/items/",
+        headers=superuser_token_headers,
+        json={"title": no_match_title, "description": "does not contain token"},
+    )
+    assert third_response.status_code == 200
+    no_match_item_id = third_response.json()["id"]
+
+    response = client.get(
+        f"{settings.API_V1_STR}/items/?q={needle}",
+        headers=superuser_token_headers,
+    )
+    assert response.status_code == 200
+    content = response.json()
+    ids = {item["id"] for item in content["data"]}
+    assert title_item_id in ids
+    assert description_item_id in ids
+    assert no_match_item_id not in ids
+
+
+def test_read_items_sort_title_asc_deterministic(
+    client: TestClient, db: Session
+) -> None:
+    sort_user = crud.create_user(
+        session=db,
+        user_create=UserCreate(
+            email=f"sort-{uuid.uuid4()}@example.com",
+            password="sortpass123",
+        ),
+    )
+
+    titles = ["zeta", "alpha", "gamma"]
+    for title in titles:
+        crud.create_item(
+            session=db,
+            item_in=ItemCreate(
+                title=title,
+                description=f"sort-seed-{uuid.uuid4()}",
+            ),
+            owner_id=sort_user.id,
+        )
+
+    login_response = client.post(
+        f"{settings.API_V1_STR}/login/access-token",
+        data={"username": sort_user.email, "password": "sortpass123"},
+    )
+    assert login_response.status_code == 200
+    sort_headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+
+    response = client.get(
+        f"{settings.API_V1_STR}/items/?sort=title_asc",
+        headers=sort_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    returned_titles = [item["title"] for item in data]
+    assert returned_titles == sorted(titles)
+
+
+def test_read_items_invalid_sort_validation(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    response = client.get(
+        f"{settings.API_V1_STR}/items/?sort=bad_value",
+        headers=superuser_token_headers,
+    )
+    assert response.status_code == 422
+    content = response.json()
+    assert "detail" in content
 
 
 def test_update_item(
