@@ -1,0 +1,72 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.fastapi.template</groupId>
+  <artifactId>karate-api-tests</artifactId>
+  <version>1.0.0-SNAPSHOT</version>
+  <name>karate-api-tests</name>
+
+  <properties>
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <!--
+      Karate is intentionally pinned to 1.4.1.
+
+      Karate 1.5.x bundles a GraalJS-based JavaScript engine that, in this
+      module's classpath, fails to load at runtime under the JDK available
+      in CI (java.lang.ClassNotFoundException for the JS engine). 1.4.1
+      uses the older JS engine and runs cleanly on JDK 17/21 here.
+
+      Before bumping this back to 1.5.x, run `mvn test` against a clean
+      JDK 17 install and confirm scenarios still execute.
+    -->
+    <karate.version>1.4.1</karate.version>
+    <maven.surefire.version>3.5.4</maven.surefire.version>
+    <slf4j.version>2.0.13</slf4j.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.intuit.karate</groupId>
+      <artifactId>karate-junit5</artifactId>
+      <version>${karate.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <!--
+      SLF4J binding so that Karate's per-request HTTP logs surface at
+      runtime. Without a binding, all `karate.log` / request-response
+      logging is silently suppressed, which makes CI failures hard to
+      diagnose.
+    -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-simple</artifactId>
+      <version>${slf4j.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+        <configuration>
+          <release>${maven.compiler.release}</release>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>${maven.surefire.version}</version>
+        <configuration>
+          <includes>
+            <include>**/*Runner.java</include>
+          </includes>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

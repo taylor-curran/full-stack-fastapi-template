@@ -1,0 +1,96 @@
+name: Karate API Tests
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    types:
+      - opened
+      - synchronize
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.filter.outputs.changed }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        id: filter
+        with:
+          filters: |
+            changed:
+              - backend/**
+              - .env
+              - compose*.yml
+              - .github/workflows/karate.yml
+
+  test-karate:
+    needs:
+      - changes
+    if: ${{ needs.changes.outputs.changed == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Bring up backend stack
+        run: |
+          docker compose down -v --remove-orphans
+          docker compose up -d db mailcatcher backend
+
+      - name: Wait for backend health
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8000/api/v1/utils/health-check/ > /dev/null; then
+              echo "Backend is healthy"
+              exit 0
+            fi
+            echo "Waiting for backend ($i)..."
+            sleep 2
+          done
+          echo "Backend failed to become healthy in time" >&2
+          docker compose logs backend
+          exit 1
+
+      - name: Run Karate tests
+        working-directory: backend/karate
+        run: |
+          mvn -B -ntp test \
+            -DbackendUrl=http://localhost:8000 \
+            -DapiPath=/api/v1 \
+            -DadminEmail=admin@example.com \
+            -DadminPassword=changethis
+
+      - name: Upload Karate report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: karate-report
+          path: backend/karate/target/karate-reports
+          if-no-files-found: ignore
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v --remove-orphans
+
+  alls-green-karate:
+    if: always()
+    needs:
+      - test-karate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide whether the needed jobs succeeded or failed
+        uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe # v1.2.2
+        with:
+          jobs: ${{ toJSON(needs) }}
+          allowed-skips: test-karate
