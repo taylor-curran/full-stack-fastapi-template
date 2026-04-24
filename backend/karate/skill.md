@@ -13,8 +13,8 @@ Do **not** add a new feature file for tiny variants; prefer extending an existin
 
 ## Where tests go
 
-- Main scenarios: `backend/karate/src/test/resources/features/*.feature`
-- Reusable setup flows: `backend/karate/src/test/resources/helpers/*.feature` (tag helpers with `@ignore`)
+- Main scenarios: `src/test/resources/features/*.feature`
+- Reusable setup flows: `src/test/resources/helpers/*.feature` (tag helpers with `@ignore`)
 
 ## Minimal authoring pattern
 
