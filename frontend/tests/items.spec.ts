@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test"
+import { expect, type Page, test } from "@playwright/test"
 import { createUser } from "./utils/privateApi"
 import {
   randomEmail,
@@ -7,6 +7,29 @@ import {
   randomPassword,
 } from "./utils/random"
 import { logInUser } from "./utils/user"
+
+// Open the actions menu for the row whose visible text contains `title`.
+// Uses an accessible name rather than a positional `.last()` selector so
+// the test isn't silently broken by a future status icon rendered as a
+// button in the same row.
+const openRowActions = async (page: Page, title: string) => {
+  const row = page.getByRole("row").filter({ hasText: title })
+  await row.getByRole("button", { name: "Item actions" }).click()
+  return row
+}
+
+const createItemViaForm = async (
+  page: Page,
+  { title, description }: { title: string; description?: string },
+) => {
+  await page.getByRole("button", { name: "Add Item" }).click()
+  await page.getByLabel("Title").fill(title)
+  if (description !== undefined) {
+    await page.getByLabel("Description").fill(description)
+  }
+  await page.getByRole("button", { name: "Save" }).click()
+  await expect(page.getByText("Item created successfully")).toBeVisible()
+}
 
 test("Items page is accessible and shows correct title", async ({ page }) => {
   await page.goto("/items")
@@ -34,27 +57,28 @@ test.describe("Items management", () => {
     await page.goto("/items")
   })
 
-  test("Create a new item successfully", async ({ page }) => {
+  test("Create a new item successfully (and persists across reload)", async ({
+    page,
+  }) => {
     const title = randomItemTitle()
     const description = randomItemDescription()
 
-    await page.getByRole("button", { name: "Add Item" }).click()
-    await page.getByLabel("Title").fill(title)
-    await page.getByLabel("Description").fill(description)
-    await page.getByRole("button", { name: "Save" }).click()
-
-    await expect(page.getByText("Item created successfully")).toBeVisible()
+    await createItemViaForm(page, { title, description })
     await expect(page.getByText(title)).toBeVisible()
+
+    // Reload-persistence is the same flow with one extra assertion site,
+    // so cover it here rather than duplicating the whole create path in a
+    // separate test.
+    await page.reload()
+    const row = page.getByRole("row").filter({ hasText: title })
+    await expect(row).toBeVisible()
+    await expect(row.getByText(description)).toBeVisible()
   })
 
   test("Create item with only required fields", async ({ page }) => {
     const title = randomItemTitle()
 
-    await page.getByRole("button", { name: "Add Item" }).click()
-    await page.getByLabel("Title").fill(title)
-    await page.getByRole("button", { name: "Save" }).click()
-
-    await expect(page.getByText("Item created successfully")).toBeVisible()
+    await createItemViaForm(page, { title })
     await expect(page.getByText(title)).toBeVisible()
   })
 
@@ -74,77 +98,19 @@ test.describe("Items management", () => {
     await expect(page.getByText("Title is required")).toBeVisible()
   })
 
-  test("Created item is visible after page reload", async ({ page }) => {
-    const title = randomItemTitle()
-    const description = randomItemDescription()
-
-    await page.getByRole("button", { name: "Add Item" }).click()
-    await page.getByLabel("Title").fill(title)
-    await page.getByLabel("Description").fill(description)
-    await page.getByRole("button", { name: "Save" }).click()
-    await expect(page.getByText("Item created successfully")).toBeVisible()
-
-    await page.reload()
-
-    const row = page.getByRole("row").filter({ hasText: title })
-    await expect(row).toBeVisible()
-    await expect(row.getByText(description)).toBeVisible()
-  })
-
-  test("Edited item persists after page reload", async ({ page }) => {
-    const originalTitle = randomItemTitle()
-    const updatedTitle = randomItemTitle()
-
-    await page.getByRole("button", { name: "Add Item" }).click()
-    await page.getByLabel("Title").fill(originalTitle)
-    await page.getByRole("button", { name: "Save" }).click()
-    await expect(page.getByText("Item created successfully")).toBeVisible()
-
-    const row = page.getByRole("row").filter({ hasText: originalTitle })
-    await row.getByRole("button").last().click()
-    await page.getByRole("menuitem", { name: "Edit Item" }).click()
-    await page.getByLabel("Title").fill(updatedTitle)
-    await page.getByRole("button", { name: "Save" }).click()
-    await expect(page.getByText("Item updated successfully")).toBeVisible()
-
-    await page.reload()
-    await expect(page.getByRole("row").filter({ hasText: updatedTitle })).toBeVisible()
-  })
-
-  test("Deleted item stays removed after page reload", async ({ page }) => {
-    const title = randomItemTitle()
-
-    await page.getByRole("button", { name: "Add Item" }).click()
-    await page.getByLabel("Title").fill(title)
-    await page.getByRole("button", { name: "Save" }).click()
-    await expect(page.getByText("Item created successfully")).toBeVisible()
-
-    const row = page.getByRole("row").filter({ hasText: title })
-    await row.getByRole("button").last().click()
-    await page.getByRole("menuitem", { name: "Delete Item" }).click()
-    await page.getByRole("button", { name: "Delete" }).click()
-    await expect(page.getByText("The item was deleted successfully")).toBeVisible()
-
-    await page.reload()
-    await expect(page.getByRole("row").filter({ hasText: title })).not.toBeVisible()
-  })
-
   test.describe("Edit and Delete", () => {
     let itemTitle: string
 
     test.beforeEach(async ({ page }) => {
       itemTitle = randomItemTitle()
-
-      await page.getByRole("button", { name: "Add Item" }).click()
-      await page.getByLabel("Title").fill(itemTitle)
-      await page.getByRole("button", { name: "Save" }).click()
-      await expect(page.getByText("Item created successfully")).toBeVisible()
+      await createItemViaForm(page, { title: itemTitle })
       await expect(page.getByRole("dialog")).not.toBeVisible()
     })
 
-    test("Edit an item successfully", async ({ page }) => {
-      const itemRow = page.getByRole("row").filter({ hasText: itemTitle })
-      await itemRow.getByRole("button").last().click()
+    test("Edit an item successfully (and persists across reload)", async ({
+      page,
+    }) => {
+      await openRowActions(page, itemTitle)
       await page.getByRole("menuitem", { name: "Edit Item" }).click()
 
       const updatedTitle = randomItemTitle()
@@ -153,19 +119,35 @@ test.describe("Items management", () => {
 
       await expect(page.getByText("Item updated successfully")).toBeVisible()
       await expect(page.getByText(updatedTitle)).toBeVisible()
+
+      await page.reload()
+      await expect(
+        page.getByRole("row").filter({ hasText: updatedTitle }),
+      ).toBeVisible()
     })
 
-    test("Delete an item successfully", async ({ page }) => {
-      const itemRow = page.getByRole("row").filter({ hasText: itemTitle })
-      await itemRow.getByRole("button").last().click()
+    test("Delete an item successfully (and stays removed across reload)", async ({
+      page,
+    }) => {
+      await openRowActions(page, itemTitle)
       await page.getByRole("menuitem", { name: "Delete Item" }).click()
-
       await page.getByRole("button", { name: "Delete" }).click()
 
       await expect(
         page.getByText("The item was deleted successfully"),
       ).toBeVisible()
-      await expect(page.getByText(itemTitle)).not.toBeVisible()
+
+      // Scope the absence assertion to the table — `toHaveCount(0)` won't
+      // be fooled by a stale toast/snackbar that still echoes the title
+      // text elsewhere on the page.
+      await expect(
+        page.getByRole("row").filter({ hasText: itemTitle }),
+      ).toHaveCount(0)
+
+      await page.reload()
+      await expect(
+        page.getByRole("row").filter({ hasText: itemTitle }),
+      ).toHaveCount(0)
     })
   })
 })

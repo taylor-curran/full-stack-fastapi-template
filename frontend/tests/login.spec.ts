@@ -16,6 +16,37 @@ const verifyInput = async (page: Page, testId: string) => {
   await expect(input).toBeEditable()
 }
 
+/**
+ * Log in via the public REST API and seed the resulting access token into
+ * localStorage so subsequent navigations are authenticated. This avoids
+ * re-running the full form-submit path for tests whose actual subject is
+ * "what does the app do once a session already exists?".
+ */
+const seedAuthenticatedSession = async (
+  page: Page,
+  email: string,
+  password: string,
+) => {
+  const apiUrl = process.env.VITE_API_URL
+  if (!apiUrl) {
+    throw new Error("VITE_API_URL is not set")
+  }
+
+  const response = await page.request.post(
+    `${apiUrl}/api/v1/login/access-token`,
+    {
+      form: { username: email, password },
+    },
+  )
+  expect(response.ok()).toBeTruthy()
+  const { access_token } = (await response.json()) as { access_token: string }
+
+  await page.goto("/login")
+  await page.evaluate((token) => {
+    localStorage.setItem("access_token", token)
+  }, access_token)
+}
+
 test("Inputs are visible, empty and editable", async ({ page }) => {
   await page.goto("/login")
 
@@ -45,41 +76,51 @@ test("Sign up link navigates to registration page", async ({ page }) => {
   await expect(page).toHaveURL("/signup")
 })
 
-test("Log in form submits with Enter key", async ({ page }) => {
-  await page.goto("/login")
+// Cover both ways of submitting the login form (button click + Enter key)
+// from a single dashboard-success assertion site, so that the success
+// expectation only lives in one place.
+const submissionMethods: Array<{
+  name: string
+  submit: (page: Page) => Promise<void>
+}> = [
+  {
+    name: "button click",
+    submit: async (page) => {
+      await page.getByRole("button", { name: "Log In" }).click()
+    },
+  },
+  {
+    name: "Enter key",
+    submit: async (page) => {
+      await page.getByTestId("password-input").press("Enter")
+    },
+  },
+]
 
-  await fillForm(page, firstSuperuser, firstSuperuserPassword)
-  await page.getByTestId("password-input").press("Enter")
+for (const { name, submit } of submissionMethods) {
+  test(`Log in with valid email and password (${name})`, async ({ page }) => {
+    await page.goto("/login")
 
-  await page.waitForURL("/")
-  await expect(
-    page.getByText("Welcome back, nice to see you again!"),
-  ).toBeVisible()
-})
+    await fillForm(page, firstSuperuser, firstSuperuserPassword)
+    await submit(page)
 
-test("Authenticated users are redirected away from /login", async ({ page }) => {
-  await page.goto("/login")
+    await page.waitForURL("/")
+    await expect(
+      page.getByText("Welcome back, nice to see you again!"),
+    ).toBeVisible()
+  })
+}
 
-  await fillForm(page, firstSuperuser, firstSuperuserPassword)
-  await page.getByRole("button", { name: "Log In" }).click()
-  await page.waitForURL("/")
+test("Authenticated users are redirected away from /login", async ({
+  page,
+}) => {
+  // Seed the session via the API instead of going through the form a
+  // second time; the behaviour under test is the redirect, not the form.
+  await seedAuthenticatedSession(page, firstSuperuser, firstSuperuserPassword)
 
   await page.goto("/login")
   await page.waitForURL("/")
   await expect(page).toHaveURL("/")
-})
-
-test("Log in with valid email and password ", async ({ page }) => {
-  await page.goto("/login")
-
-  await fillForm(page, firstSuperuser, firstSuperuserPassword)
-  await page.getByRole("button", { name: "Log In" }).click()
-
-  await page.waitForURL("/")
-
-  await expect(
-    page.getByText("Welcome back, nice to see you again!"),
-  ).toBeVisible()
 })
 
 test("Log in with invalid email", async ({ page }) => {
