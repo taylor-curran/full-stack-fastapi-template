@@ -126,3 +126,95 @@ Feature: Items API endpoints
     And header Authorization = intruderAuth.authHeader
     When method delete
     Then status 403
+
+  Scenario: Listing items supports q search combined with sort order
+    # Seed two items with a known unique substring so we can search for them
+    # deterministically without depending on other pre-existing data.
+    * def tag = "karate-search-" + java.util.UUID.randomUUID()
+    * def titleA = "Alpha " + tag
+    * def titleB = "Bravo " + tag
+
+    Given path "items"
+    And header Authorization = adminAuth.authHeader
+    And request { title: '#(titleA)', description: 'search seed A' }
+    When method post
+    Then status 200
+
+    Given path "items"
+    And header Authorization = adminAuth.authHeader
+    And request { title: '#(titleB)', description: 'search seed B' }
+    When method post
+    Then status 200
+
+    # Ask for those two items specifically, sorted by title ascending.
+    Given path "items"
+    And header Authorization = adminAuth.authHeader
+    And param q = tag
+    And param sort = "title_asc"
+    When method get
+    Then status 200
+    And match response.count == 2
+    And match response.data[0].title == titleA
+    And match response.data[1].title == titleB
+
+    # Flip to title_desc and confirm the order swaps.
+    Given path "items"
+    And header Authorization = adminAuth.authHeader
+    And param q = tag
+    And param sort = "title_desc"
+    When method get
+    Then status 200
+    And match response.data[0].title == titleB
+    And match response.data[1].title == titleA
+
+  Scenario: Invalid sort value returns 422
+    Given path "items"
+    And header Authorization = adminAuth.authHeader
+    And param sort = "not_a_real_sort"
+    When method get
+    Then status 422
+
+  Scenario: status=mine filter returns only the caller's items
+    # Seed an item as the admin (our "mine" caller) with a unique tag.
+    * def mineTag = "karate-mine-" + java.util.UUID.randomUUID()
+    * def mineTitle = "Mine item " + mineTag
+
+    Given path "items"
+    And header Authorization = adminAuth.authHeader
+    And request { title: '#(mineTitle)', description: 'owned by admin' }
+    When method post
+    Then status 200
+
+    # Seed an item as a different freshly-created user so it should be
+    # excluded by status=mine when queried as admin.
+    * def otherEmail = 'karate-items-other-' + java.util.UUID.randomUUID() + '@example.com'
+    * def otherPassword = 'otherpass1234'
+    * call read('classpath:helpers/signup-user.feature') { email: '#(otherEmail)', password: '#(otherPassword)', fullName: 'Other Owner' }
+    * def otherAuth = call read('classpath:helpers/login.feature') { username: '#(otherEmail)', password: '#(otherPassword)' }
+    * def otherTitle = "Other item " + mineTag
+
+    Given path "items"
+    And header Authorization = otherAuth.authHeader
+    And request { title: '#(otherTitle)', description: 'owned by other' }
+    When method post
+    Then status 200
+
+    # As admin, status=mine narrowed by q should only return admin's seeded item.
+    Given path "items"
+    And header Authorization = adminAuth.authHeader
+    And param q = mineTag
+    And param status = "mine"
+    When method get
+    Then status 200
+    And match response.count == 1
+    And match response.data[0].title == mineTitle
+
+    # And status=others should only surface the other user's item.
+    Given path "items"
+    And header Authorization = adminAuth.authHeader
+    And param q = mineTag
+    And param status = "others"
+    When method get
+    Then status 200
+    And match response.count == 1
+    And match response.data[0].title == otherTitle
