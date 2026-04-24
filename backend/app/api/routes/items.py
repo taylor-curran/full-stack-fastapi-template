@@ -1,61 +1,82 @@
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
+from sqlalchemy import or_
 from sqlmodel import col, func, select
 
 from app.api.deps import CurrentUser, SessionDep
-from app.models import Item, ItemCreate, ItemPublic, ItemsPublic, ItemUpdate, Message
+from app.models import (
+    Item,
+    ItemCreate,
+    ItemPublic,
+    ItemsPublic,
+    ItemUpdate,
+    Message,
+    User,
+)
 
 router = APIRouter(prefix="/items", tags=["items"])
 
 
+ItemStatus = Literal["active", "inactive"]
+ItemSort = Literal["created_at_desc", "created_at_asc", "title_asc", "title_desc"]
+
+
+def _get_sort_clauses(sort: ItemSort) -> tuple[Any, Any]:
+    if sort == "created_at_asc":
+        return col(Item.created_at).asc(), col(Item.id).asc()
+    if sort == "title_asc":
+        return col(Item.title).asc(), col(Item.id).asc()
+    if sort == "title_desc":
+        return col(Item.title).desc(), col(Item.id).desc()
+    return col(Item.created_at).desc(), col(Item.id).desc()
+
+
 @router.get("/", response_model=ItemsPublic)
 def read_items(
-    session: SessionDep, current_user: CurrentUser, skip: int = 0, limit: int = 100
+    session: SessionDep,
+    current_user: CurrentUser,
+    skip: int = 0,
+    limit: int = 100,
+    status: ItemStatus | None = None,
+    sort: ItemSort = "created_at_desc",
+    q: str | None = None,
 ) -> Any:
     """
     Retrieve items.
     """
+    statement = select(Item)
 
-    if current_user.is_superuser:
-        count_statement = select(func.count()).select_from(Item)
-        count = session.exec(count_statement).one()
-        statement = (
-            select(Item).order_by(col(Item.created_at).desc()).offset(skip).limit(limit)
+    if not current_user.is_superuser:
+        statement = statement.where(Item.owner_id == current_user.id)
+
+    if status:
+        statement = statement.join(User, User.id == Item.owner_id).where(
+            User.is_active == (status == "active")
         )
-        items = session.exec(statement).all()
-    else:
-        count_statement = (
-            select(func.count())
-            .select_from(Item)
-            .where(Item.owner_id == current_user.id)
+
+    query_text = q.strip() if q else None
+    if query_text:
+        search_term = f"%{query_text}%"
+        statement = statement.where(
+            or_(
+                col(Item.title).ilike(search_term),
+                col(Item.description).ilike(search_term),
+            )
         )
-        count = session.exec(count_statement).one()
-        statement = (
-            select(Item)
-            .where(Item.owner_id == current_user.id)
-            .order_by(col(Item.created_at).desc())
-            .offset(skip)
-            .limit(limit)
-        )
-        items = session.exec(statement).all()
+
+    count_statement = select(func.count()).select_from(statement.subquery())
+    count = session.exec(count_statement).one()
+
+    primary_sort, secondary_sort = _get_sort_clauses(sort)
+    statement = (
+        statement.order_by(primary_sort, secondary_sort).offset(skip).limit(limit)
+    )
+    items = session.exec(statement).all()
 
     items_public = [ItemPublic.model_validate(item) for item in items]
     return ItemsPublic(data=items_public, count=count)
-
-
-@router.get("/{id}", response_model=ItemPublic)
-def read_item(session: SessionDep, current_user: CurrentUser, id: uuid.UUID) -> Any:
-    """
-    Get item by ID.
-    """
-    item = session.get(Item, id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Item not found")
-    if not current_user.is_superuser and (item.owner_id != current_user.id):
-        raise HTTPException(status_code=403, detail="Not enough permissions")
-    return item
 
 
 @router.post("/", response_model=ItemPublic)
@@ -69,6 +90,56 @@ def create_item(
     session.add(item)
     session.commit()
     session.refresh(item)
+    return item
+
+
+@router.post("/bulk", response_model=ItemsPublic)
+def create_items_bulk(
+    *, session: SessionDep, current_user: CurrentUser, items_in: list[ItemCreate]
+) -> Any:
+    """
+    Create multiple new items.
+    """
+    seen_titles: set[str] = set()
+    for item_in in items_in:
+        if item_in.title in seen_titles:
+            raise HTTPException(status_code=409, detail="Item with this title already exists")
+        seen_titles.add(item_in.title)
+
+    if seen_titles:
+        existing_item = session.exec(
+            select(Item).where(
+                Item.owner_id == current_user.id,
+                col(Item.title).in_(seen_titles),
+            )
+        ).first()
+        if existing_item:
+            raise HTTPException(status_code=409, detail="Item with this title already exists")
+
+    items = [
+        Item.model_validate(item_in, update={"owner_id": current_user.id})
+        for item_in in items_in
+    ]
+    for item in items:
+        session.add(item)
+    session.commit()
+    for item in items:
+        session.refresh(item)
+
+    items_public = [ItemPublic.model_validate(item) for item in items]
+    return ItemsPublic(data=items_public, count=len(items_public))
+
+
+@router.get("/{id}", response_model=ItemPublic)
+def read_item(session: SessionDep, current_user: CurrentUser, id: uuid.UUID) -> Any:
+    """
+    Get item by ID.
+    """
+    item = session.get(Item, id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    if not current_user.is_superuser and (item.owner_id != current_user.id):
+        raise HTTPException(status_code=403, detail="Not enough permissions")
     return item
 
 
