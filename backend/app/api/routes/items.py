@@ -17,7 +17,6 @@ def read_items(
     """
     Retrieve items.
     """
-
     if current_user.is_superuser:
         count_statement = select(func.count()).select_from(Item)
         count = session.exec(count_statement).one()
@@ -45,19 +44,6 @@ def read_items(
     return ItemsPublic(data=items_public, count=count)
 
 
-@router.get("/{id}", response_model=ItemPublic)
-def read_item(session: SessionDep, current_user: CurrentUser, id: uuid.UUID) -> Any:
-    """
-    Get item by ID.
-    """
-    item = session.get(Item, id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Item not found")
-    if not current_user.is_superuser and (item.owner_id != current_user.id):
-        raise HTTPException(status_code=403, detail="Not enough permissions")
-    return item
-
-
 @router.post("/", response_model=ItemPublic)
 def create_item(
     *, session: SessionDep, current_user: CurrentUser, item_in: ItemCreate
@@ -69,6 +55,56 @@ def create_item(
     session.add(item)
     session.commit()
     session.refresh(item)
+    return item
+
+
+@router.post("/bulk", response_model=ItemsPublic)
+def create_items_bulk(
+    *, session: SessionDep, current_user: CurrentUser, items_in: list[ItemCreate]
+) -> Any:
+    """
+    Create multiple new items.
+    """
+    seen_titles: set[str] = set()
+    for item_in in items_in:
+        if item_in.title in seen_titles:
+            raise HTTPException(status_code=409, detail="Item with this title already exists")
+        seen_titles.add(item_in.title)
+
+    if seen_titles:
+        existing_item = session.exec(
+            select(Item).where(
+                Item.owner_id == current_user.id,
+                col(Item.title).in_(seen_titles),
+            )
+        ).first()
+        if existing_item:
+            raise HTTPException(status_code=409, detail="Item with this title already exists")
+
+    items = [
+        Item.model_validate(item_in, update={"owner_id": current_user.id})
+        for item_in in items_in
+    ]
+    for item in items:
+        session.add(item)
+    session.commit()
+    for item in items:
+        session.refresh(item)
+
+    items_public = [ItemPublic.model_validate(item) for item in items]
+    return ItemsPublic(data=items_public, count=len(items_public))
+
+
+@router.get("/{id}", response_model=ItemPublic)
+def read_item(session: SessionDep, current_user: CurrentUser, id: uuid.UUID) -> Any:
+    """
+    Get item by ID.
+    """
+    item = session.get(Item, id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    if not current_user.is_superuser and (item.owner_id != current_user.id):
+        raise HTTPException(status_code=403, detail="Not enough permissions")
     return item
 
 
