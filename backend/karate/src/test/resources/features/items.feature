@@ -87,6 +87,63 @@ Feature: Items API endpoints
     And match response.detail == '#string'
     And match response.detail == '#regex (?i).*not found.*'
 
+  Scenario: Superuser can bulk create items
+    * def suffix = java.util.UUID.randomUUID() + ''
+    * def titleA = 'Karate Bulk A ' + suffix
+    * def titleB = 'Karate Bulk B ' + suffix
+    * def titleC = 'Karate Bulk C ' + suffix
+
+    Given path 'items', 'bulk'
+    And header Authorization = adminAuth.authHeader
+    And request
+      """
+      [
+        { "title": "#(titleA)", "description": "first" },
+        { "title": "#(titleB)", "description": "second" },
+        { "title": "#(titleC)", "description": null }
+      ]
+      """
+    When method post
+    Then status 200
+    And match response.count == 3
+    And match response.data == '#[3]'
+    And match response.data[*].title contains titleA
+    And match response.data[*].title contains titleB
+    And match response.data[*].title contains titleC
+
+  Scenario: Bulk create returns 409 on duplicate titles in payload
+    * def suffix = java.util.UUID.randomUUID() + ''
+    * def dupTitle = 'Karate Bulk Dup ' + suffix
+
+    Given path 'items', 'bulk'
+    And header Authorization = adminAuth.authHeader
+    And request
+      """
+      [
+        { "title": "#(dupTitle)", "description": "one" },
+        { "title": "#(dupTitle)", "description": "two" }
+      ]
+      """
+    When method post
+    Then status 409
+    And match response.detail == '#string'
+
+  Scenario: Bulk create returns 422 on validation failure
+    * def suffix = java.util.UUID.randomUUID() + ''
+    * def validTitle = 'Karate Bulk Valid ' + suffix
+
+    Given path 'items', 'bulk'
+    And header Authorization = adminAuth.authHeader
+    And request
+      """
+      [
+        { "title": "#(validTitle)", "description": "ok" },
+        { "description": "missing title" }
+      ]
+      """
+    When method post
+    Then status 422
+
   Scenario: Non-superuser cannot read another user's item (403)
     # Owner: a fresh non-superuser, created via public signup.
     * def ownerEmail = 'karate-item-owner-' + java.util.UUID.randomUUID() + '@example.com'
